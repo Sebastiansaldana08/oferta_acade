@@ -1,75 +1,94 @@
 import streamlit as st
 import pandas as pd
+import re
 
-# Función para mostrar validaciones con colores e íconos
-def mostrar_validacion(resultado, mensaje_exito, mensaje_error):
+# Función para normalizar nombres de columnas (eliminar espacios adicionales, saltos de línea y convertir a mayúsculas)
+def normalizar_columnas(df):
+    df.columns = df.columns.str.replace(r'\s+', ' ', regex=True).str.strip().str.upper()
+    return df
+
+# Función para verificar la existencia de una columna y obtener su nombre real en el DataFrame
+def obtener_columna(df, nombre_base):
+    nombre_base = re.sub(r'\s+', ' ', nombre_base.strip().upper())
+    for col in df.columns:
+        col_normalizado = re.sub(r'\s+', ' ', col.strip().upper())
+        if col_normalizado == nombre_base:
+            return col
+    return None
+
+# Función para mostrar validación con observaciones detalladas
+def mostrar_validacion(resultado, mensaje_exito, mensaje_error, detalles=None):
     if resultado:
         st.success(f"✔️ {mensaje_exito}")
     else:
-        st.error(f"❌ {mensaje_error}")
-    return resultado
+        error_msg = f"❌ {mensaje_error}"
+        if detalles:
+            error_msg += f": {', '.join(map(str, detalles))}"
+        st.error(error_msg)
+        return mensaje_error if not detalles else f"{mensaje_error}: {', '.join(map(str, detalles))}"
+    return None
 
-# Función para validar que una columna no esté vacía
+# Validaciones individuales
 def validar_no_vacio(df, columna):
-    if df[columna].isnull().any():
-        return False, f"La columna {columna} contiene valores vacíos."
-    return True, f"La columna {columna} no tiene valores vacíos."
+    vacios = df[df[columna].isnull()]
+    if vacios.empty:
+        return True, f"La columna '{columna}' no tiene valores vacíos.", None
+    return False, f"La columna '{columna}' contiene valores vacíos", vacios.index.tolist()
 
-# Validación general para formato de fechas
-def validar_fecha(df, columna):
-    try:
-        pd.to_datetime(df[columna], errors='raise')
-        return True, f"La columna {columna} tiene fechas válidas."
-    except:
-        return False, f"La columna {columna} contiene fechas no válidas."
+def validar_longitud(df, columna, longitud_max):
+    largos = df[df[columna].str.len() > longitud_max]
+    if largos.empty:
+        return True, f"La columna '{columna}' cumple con el tamaño máximo de {longitud_max} caracteres.", None
+    return False, f"El nombre del curso excede los {longitud_max} caracteres", largos.index.tolist()
 
-# Validación de DNI en formato numérico de 8 dígitos
-def validar_dni(df, columna):
-    if df[columna].astype(str).str.match(r'^\d{8}$').all():
-        return True, f"La columna {columna} tiene DNIs válidos."
-    return False, f"La columna {columna} contiene DNIs no válidos."
-
-# Validación de valores específicos (como modalidades o días)
-def validar_valores(df, columna, valores_permitidos):
-    if df[columna].isin(valores_permitidos).all():
-        return True, f"La columna {columna} tiene valores válidos."
-    return False, f"La columna {columna} contiene valores no válidos."
-
-# Validación de rango numérico para columnas específicas
 def validar_rango(df, columna, min_val, max_val):
-    if df[columna].between(min_val, max_val).all():
-        return True, f"Todos los valores de la columna {columna} están dentro del rango permitido."
-    return False, f"La columna {columna} tiene valores fuera del rango permitido ({min_val}-{max_val})."
+    fuera_rango = df[~df[columna].between(min_val, max_val)]
+    if fuera_rango.empty:
+        return True, f"Todos los valores de la columna '{columna}' están dentro del rango permitido (1-6).", None
+    return False, f"La columna '{columna}' tiene valores fuera del rango permitido (1-6)", fuera_rango.index.tolist()
 
-# Validación para verificar duplicados
-def validar_duplicados(df, columna):
-    duplicados = df[df.duplicated(subset=[columna], keep=False)]
-    if duplicados.empty:
-        return True, f"No se encontraron duplicados en la columna {columna}."
-    return False, f"Existen duplicados en la columna {columna}: {', '.join(duplicados[columna].unique())}"
+def validar_valores(df, columna, valores_permitidos):
+    valores_invalidos = df[~df[columna].isin(valores_permitidos)]
+    if valores_invalidos.empty:
+        return True, f"La columna '{columna}' tiene valores válidos.", None
+    return False, f"La columna '{columna}' contiene valores no válidos", valores_invalidos.index.tolist()
 
-# Función para validar horarios (hora de inicio < hora de fin)
+def validar_fecha(df, columna):
+    fechas_invalidas = df[~pd.to_datetime(df[columna], errors='coerce').notnull()]
+    if fechas_invalidas.empty:
+        return True, f"La columna '{columna}' tiene fechas válidas.", None
+    return False, f"La columna '{columna}' contiene fechas no válidas", fechas_invalidas.index.tolist()
+
+def validar_dni(df, columna):
+    # Valida tanto vacíos como formato de 8 dígitos
+    vacios = df[df[columna].isnull()]
+    if not vacios.empty:
+        return False, f"La columna '{columna}' contiene valores vacíos", vacios.index.tolist()
+    dni_invalidos = df[~df[columna].astype(str).str.match(r'^\d{8}$')]
+    if dni_invalidos.empty:
+        return True, f"La columna '{columna}' tiene DNIs válidos.", None
+    return False, f"La columna '{columna}' contiene DNIs no válidos", dni_invalidos.index.tolist()
+
 def validar_horarios(df, inicio_col, fin_col):
-    if (df[inicio_col] < df[fin_col]).all():
-        return True, "Los horarios de inicio y fin son válidos."
-    return False, "Existen horarios donde la hora de inicio es mayor o igual que la hora de fin."
+    horarios_invalidos = df[df[inicio_col] >= df[fin_col]]
+    if horarios_invalidos.empty:
+        return True, "Los horarios de inicio y fin son válidos.", None
+    return False, "Existen horarios donde la hora de inicio es mayor o igual que la hora de fin", horarios_invalidos.index.tolist()
 
 # Título de la app
 st.title("Validación de Oferta Académica")
 
-# Subir archivo de oferta académica
+# Subir archivo de oferta académica y lista de cursos
 archivo_oferta = st.file_uploader("Sube el archivo de oferta académica", type=["xlsx"])
-
-# Subir archivo de lista de cursos
 archivo_lista_cursos = st.file_uploader("Sube el archivo de lista de cursos", type=["xlsx"])
 
 # Observaciones para los errores
 observaciones = []
 
 if archivo_oferta and archivo_lista_cursos:
-    # Leer archivos
-    oferta_df = pd.read_excel(archivo_oferta, sheet_name='oferta curso')
-    lista_cursos_df = pd.read_excel(archivo_lista_cursos, sheet_name='Hoja1')
+    # Leer y normalizar columnas
+    oferta_df = normalizar_columnas(pd.read_excel(archivo_oferta, sheet_name='oferta curso'))
+    lista_cursos_df = normalizar_columnas(pd.read_excel(archivo_lista_cursos, sheet_name='Hoja1'))
 
     # Lista para contar validaciones exitosas y fallidas
     total_validaciones = 0
@@ -78,93 +97,118 @@ if archivo_oferta and archivo_lista_cursos:
     # Validaciones
     st.write("### Validaciones:")
 
-    # 1. Validar que la columna 'CURSO' no esté vacía
-    total_validaciones += 1
-    resultado, mensaje = validar_no_vacio(oferta_df, 'CURSO')
-    resultado = mostrar_validacion(resultado, mensaje, "La columna 'CURSO' tiene valores vacíos.")
-    if resultado:
-        validaciones_exitosas += 1
-    else:
-        observaciones.append(mensaje)
+    # Validación de que la columna CURSO no esté vacía y los cursos existan en la lista de referencia
+    columna_curso = obtener_columna(oferta_df, 'CURSO')
+    if columna_curso:
+        total_validaciones += 1
+        resultado, mensaje, detalles = validar_no_vacio(oferta_df, columna_curso)
+        observacion = mostrar_validacion(resultado, "La columna 'CURSO' no tiene valores vacíos.", mensaje, detalles)
+        if resultado:
+            validaciones_exitosas += 1
+        elif observacion:
+            observaciones.append(observacion)
+        
+        # Validación de que los cursos existan en la lista de referencia (sin considerar vacíos)
+        if 'CURSO' in lista_cursos_df.columns:
+            cursos_no_existentes = oferta_df[oferta_df[columna_curso].notnull() & ~oferta_df[columna_curso].isin(lista_cursos_df['CURSO'])]
+            if cursos_no_existentes.empty:
+                mensaje = "Todos los cursos existen en la lista de referencia."
+                resultado = True
+            else:
+                mensaje = "Los siguientes cursos no existen en la lista de referencia"
+                resultado = False
+                observacion = mostrar_validacion(resultado, mensaje, mensaje, cursos_no_existentes[columna_curso].unique().tolist())
+                observaciones.append(observacion)
 
-    # 2. Validar que los cursos existan en la lista de referencia
-    total_validaciones += 1
-    cursos_no_existentes = oferta_df[~oferta_df['CURSO'].isin(lista_cursos_df['CURSO'])]
-    if cursos_no_existentes.empty:
-        mensaje = "Todos los cursos existen en la lista de referencia."
-        resultado = True
-    else:
-        mensaje = f"Los siguientes cursos no existen en la lista de referencia: {', '.join(cursos_no_existentes['CURSO'].unique())}"
-        resultado = False
-        observaciones.append(mensaje)
-    mostrar_validacion(resultado, mensaje, mensaje)
+    # Validación de que la columna NOMBRE DE CURSO no esté vacía
+    columna_nombre_curso = obtener_columna(oferta_df, 'NOMBRE DE CURSO')
+    if columna_nombre_curso:
+        total_validaciones += 1
+        resultado, mensaje, detalles = validar_no_vacio(oferta_df, columna_nombre_curso)
+        observacion = mostrar_validacion(resultado, "La columna 'NOMBRE DE CURSO' no tiene valores vacíos.", mensaje, detalles)
+        if resultado:
+            validaciones_exitosas += 1
+        elif observacion:
+            observaciones.append(observacion)
 
-    # 3. Validación del rango de créditos
-    total_validaciones += 1
-    resultado, mensaje = validar_rango(oferta_df, 'CREDITOS', 1, 6)
-    resultado = mostrar_validacion(resultado, mensaje, "Los créditos están fuera del rango permitido.")
-    if resultado:
-        validaciones_exitosas += 1
-    else:
-        observaciones.append(mensaje)
+        # Validación de longitud máxima del NOMBRE DE CURSO
+        total_validaciones += 1
+        resultado, mensaje, detalles = validar_longitud(oferta_df, columna_nombre_curso, 100)
+        observacion = mostrar_validacion(resultado, "La columna 'NOMBRE DE CURSO' cumple con el tamaño máximo de 100 caracteres.", mensaje, detalles)
+        if resultado:
+            validaciones_exitosas += 1
+        elif observacion:
+            observaciones.append(observacion)
 
-    # 4. Validar que el DNI tenga 8 dígitos
-    total_validaciones += 1
-    resultado, mensaje = validar_dni(oferta_df, 'DNI DOCENTE')
-    resultado = mostrar_validacion(resultado, mensaje, "DNI no válido en la columna 'DNI DOCENTE'.")
-    if resultado:
-        validaciones_exitosas += 1
-    else:
-        observaciones.append(mensaje)
+    # Validación del rango de créditos
+    columna_creditos = obtener_columna(oferta_df, 'CREDITOS')
+    if columna_creditos:
+        total_validaciones += 1
+        resultado, mensaje, detalles = validar_rango(oferta_df, columna_creditos, 1, 6)
+        observacion = mostrar_validacion(resultado, "Todos los valores de la columna 'CREDITOS' están dentro del rango permitido.", mensaje, detalles)
+        if resultado:
+            validaciones_exitosas += 1
+        elif observacion:
+            observaciones.append(observacion)
 
-    # 5. Validar que 'MODALIDAD' contenga valores permitidos
-    modalidades_permitidas = ["Presencial", "Virtual", "Semipresencial"]
-    total_validaciones += 1
-    resultado, mensaje = validar_valores(oferta_df, 'MODALIDAD', modalidades_permitidas)
-    resultado = mostrar_validacion(resultado, mensaje, "La columna 'MODALIDAD' contiene valores no válidos.")
-    if resultado:
-        validaciones_exitosas += 1
-    else:
-        observaciones.append(mensaje)
+    # Validación del formato de DNI DOCENTE
+    columna_dni = obtener_columna(oferta_df, 'DNI DOCENTE')
+    if columna_dni:
+        total_validaciones += 1
+        resultado, mensaje, detalles = validar_dni(oferta_df, columna_dni)
+        observacion = mostrar_validacion(resultado, "La columna 'DNI DOCENTE' tiene DNIs válidos.", mensaje, detalles)
+        if resultado:
+            validaciones_exitosas += 1
+        elif observacion:
+            observaciones.append(observacion)
 
-    # 6. Validar que 'FECHA INICIO CURSO' y 'FECHA FIN CURSO' sean válidas
-    total_validaciones += 1
-    resultado, mensaje = validar_fecha(oferta_df, 'FECHA INICIO CURSO')
-    mostrar_validacion(resultado, mensaje, "Fecha no válida en 'FECHA INICIO CURSO'.")
-    if resultado:
-        validaciones_exitosas += 1
-    else:
-        observaciones.append(mensaje)
-    
-    total_validaciones += 1
-    resultado, mensaje = validar_fecha(oferta_df, 'FECHA FIN CURSO')
-    mostrar_validacion(resultado, mensaje, "Fecha no válida en 'FECHA FIN CURSO'.")
-    if resultado:
-        validaciones_exitosas += 1
-    else:
-        observaciones.append(mensaje)
+    # Validación de valores en la columna MODALIDAD (vacíos y contenido válido)
+    columna_modalidad = obtener_columna(oferta_df, 'MODALIDAD')
+    if columna_modalidad:
+        total_validaciones += 1
+        # Validar que no esté vacía
+        resultado, mensaje, detalles = validar_no_vacio(oferta_df, columna_modalidad)
+        observacion = mostrar_validacion(resultado, "La columna 'MODALIDAD' no tiene valores vacíos.", mensaje, detalles)
+        if resultado:
+            validaciones_exitosas += 1
+        elif observacion:
+            observaciones.append(observacion)
+        # Validar que contenga valores permitidos
+        modalidades_permitidas = ["PRESENCIAL", "VIRTUAL", "SEMIPRESENCIAL"]
+        total_validaciones += 1
+        resultado, mensaje, detalles = validar_valores(oferta_df, columna_modalidad, modalidades_permitidas)
+        observacion = mostrar_validacion(resultado, "La columna 'MODALIDAD' tiene valores válidos.", mensaje, detalles)
+        if resultado:
+            validaciones_exitosas += 1
+        elif observacion:
+            observaciones.append(observacion)
 
-    # 7. Validar los horarios de inicio y fin
-    total_validaciones += 1
-    resultado, mensaje = validar_horarios(oferta_df, 'HORA INICIO', 'HORA FIN')
-    resultado = mostrar_validacion(resultado, mensaje, "Existen horarios incorrectos.")
-    if resultado:
-        validaciones_exitosas += 1
-    else:
-        observaciones.append(mensaje)
+    # Validación de fechas
+    for fecha_col_base in ['FECHA INICIO CURSO', 'FECHA FIN CURSO', 'FECHA ENTREGA DE NOTA']:
+        col_fecha = obtener_columna(oferta_df, fecha_col_base)
+        if col_fecha:
+            total_validaciones += 1
+            resultado, mensaje, detalles = validar_fecha(oferta_df, col_fecha)
+            observacion = mostrar_validacion(resultado, f"La columna '{col_fecha}' tiene fechas válidas.", mensaje, detalles)
+            if resultado:
+                validaciones_exitosas += 1
+            elif observacion:
+                observaciones.append(observacion)
 
-    # 8. Validar duplicados en la columna 'CURSO'
-    total_validaciones += 1
-    resultado, mensaje = validar_duplicados(oferta_df, 'CURSO')
-    resultado = mostrar_validacion(resultado, mensaje, "Se encontraron duplicados en la columna 'CURSO'.")
-    if resultado:
-        validaciones_exitosas += 1
-    else:
-        observaciones.append(mensaje)
+    # Validación de horarios de inicio y fin
+    col_inicio = obtener_columna(oferta_df, 'HORA INICIO')
+    col_fin = obtener_columna(oferta_df, 'HORA FIN')
+    if col_inicio and col_fin:
+        total_validaciones += 1
+        resultado, mensaje, detalles = validar_horarios(oferta_df, col_inicio, col_fin)
+        observacion = mostrar_validacion(resultado, "Los horarios son válidos.", mensaje, detalles)
+        if resultado:
+            validaciones_exitosas += 1
+        elif observacion:
+            observaciones.append(observacion)
 
-    # Resumen y observaciones finales
-    porcentaje_exitosas = (validaciones_exitosas / total_validaciones) * 100
-
+    # Resumen de validaciones exitosas
+    porcentaje_exitosas = (validaciones_exitosas / total_validaciones) * 100 if total_validaciones > 0 else 0
     st.write("### Resumen de Validaciones")
     st.progress(porcentaje_exitosas / 100)
     st.write(f"Validaciones exitosas: {validaciones_exitosas}/{total_validaciones}")
@@ -174,6 +218,8 @@ if archivo_oferta and archivo_lista_cursos:
     if observaciones:
         st.write("### Observaciones de Errores")
         for obs in observaciones:
-            st.write(f"- {obs}")
+            if obs:
+                st.write(f"- {obs}")
+
 else:
     st.write("Por favor, sube ambos archivos para continuar.")
